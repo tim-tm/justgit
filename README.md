@@ -1,4 +1,4 @@
-# mingit
+# justgit
 
 Minimal alternative to GitHub
 

@@ -1,5 +1,5 @@
-#ifndef MINGIT_H
-#define MINGIT_H
+#ifndef MAIN_H
+#define MAIN_H
 
 #define _GNU_SOURCE
 #include <string.h>
@@ -56,4 +56,4 @@ enum MHD_Result endpoint_repo_new_process(const char *key, const char *filename,
                                           const char *transfer_encoding,
                                           const char *data);
 
-#endif // !MINGIT_H
+#endif // !MAIN_H

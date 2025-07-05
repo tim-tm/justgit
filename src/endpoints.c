@@ -1,6 +1,6 @@
 #include "main.h"
 
-// NOB_IMPLEMENTATION is already defined by mingit.c
+// NOB_IMPLEMENTATION is already defined by main.c
 #include "../nob.h"
 #include <git2.h>
 
