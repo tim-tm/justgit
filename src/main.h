@@ -17,6 +17,7 @@
 #define MAX_PAGE_SIZE 65536
 #define MAX_POST_KEY_SIZE 64
 #define MAX_POST_DATA_SIZE 448
+#define USER_FILE_NAME "justgit-users.bin"
 
 typedef struct s_arguments {
     unsigned short port;
@@ -26,8 +27,10 @@ typedef struct s_endpoint_data {
     struct MHD_Connection *connection;
     const char *method;
     const char *url;
+
     struct MHD_PostProcessor *postprocessor;
     bool post_failed;
+    const char *post_message;
 } endpoint_data;
 
 typedef enum MHD_Result (*endpoint_func_run)(endpoint_data *data);

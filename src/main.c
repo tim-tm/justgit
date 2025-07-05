@@ -20,11 +20,12 @@ static const endpoint endpoints[] = {
      .iterate_post = endpoint_user_new_process}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
-enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
-                             const char *key, const char *filename,
-                             const char *content_type,
-                             const char *transfer_encoding, const char *data,
-                             uint64_t off, size_t size) {
+static enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
+                                    const char *key, const char *filename,
+                                    const char *content_type,
+                                    const char *transfer_encoding,
+                                    const char *data, uint64_t off,
+                                    size_t size) {
     (void)(kind);
     (void)(off);
     (void)(size);
@@ -44,10 +45,11 @@ enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
     return MHD_YES;
 }
 
-enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
-                                  const char *url, const char *method,
-                                  const char *version, const char *upload_data,
-                                  size_t *upload_data_size, void **con_cls) {
+static enum MHD_Result
+handle_connection(void *cls, struct MHD_Connection *connection, const char *url,
+                  const char *method, const char *version,
+                  const char *upload_data, size_t *upload_data_size,
+                  void **con_cls) {
     (void)(cls);
 
     if (*con_cls == NULL) {
@@ -61,6 +63,8 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
         data->connection = connection;
         data->method = method;
         data->url = url;
+        data->post_failed = false;
+        data->post_message = NULL;
 
         if (strncmp(method, "POST", MAX_ENDPOINT_INFO_LEN) == 0) {
             data->postprocessor = MHD_create_post_processor(
@@ -98,8 +102,9 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
     return send_page_plain(connection, MHD_HTTP_NOT_FOUND, "Not found");
 }
 
-void request_completed(void *cls, struct MHD_Connection *connection,
-                       void **con_cls, enum MHD_RequestTerminationCode toe) {
+static void request_completed(void *cls, struct MHD_Connection *connection,
+                              void **con_cls,
+                              enum MHD_RequestTerminationCode toe) {
     (void)(cls);
     (void)(connection);
     (void)(toe);
@@ -115,8 +120,8 @@ void request_completed(void *cls, struct MHD_Connection *connection,
     *con_cls = NULL;
 }
 
-int parse_arguments(const char *program_name, int argc, char **argv,
-                    arguments *args) {
+static int parse_arguments(const char *program_name, int argc, char **argv,
+                           arguments *args) {
     const char *command_name = nob_shift(argv, argc);
     if (strncmp(command_name, "-p", 2) == 0) {
         if (argc <= 0) {

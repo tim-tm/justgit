@@ -11,87 +11,19 @@ static size_t users_count = 0;
 static user current_user = {0};
 
 enum MHD_Result endpoint_root_run(endpoint_data *data) {
-    const char *page = "{\"status\": \"ok\"}";
-
-    struct MHD_Response *response = MHD_create_response_from_buffer(
-        16, (void *)page, MHD_RESPMEM_PERSISTENT);
-
-    int ret;
-    if ((ret = MHD_add_response_header(response, "Content-Type",
-                                       "application/json")) == MHD_NO) {
-        MHD_destroy_response(response);
-        return ret;
-    }
-
-    if ((ret = MHD_add_response_header(response, "Access-Control-Allow-Origin",
-                                       "*")) == MHD_NO) {
-        MHD_destroy_response(response);
-        return ret;
-    }
-
-    ret = MHD_queue_response(data->connection, MHD_HTTP_OK, response);
-    MHD_destroy_response(response);
-    return ret;
+    return send_page_plain(data->connection, MHD_HTTP_OK, "success");
 }
 
 enum MHD_Result endpoint_user_new_run(endpoint_data *data) {
-    if (data->post_failed) {
+    if (data->post_failed || current_user.username[0] == '\0' ||
+        current_user.password_hash[0] == '\0') {
         return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
-                               "Failed to process POST-data");
+                               data->post_message == NULL ? "Invalid POST-data"
+                                                          : data->post_message);
     }
 
     nob_log(NOB_INFO, "Adding user: %s", current_user.username);
-    if (users == NULL) {
-        FILE *fp = fopen("justgit-users.bin", "rb");
-        if (fp == NULL && errno != ENOENT) {
-            nob_log(NOB_ERROR,
-                    "Failed to add user: Could not open file for reading (%s)",
-                    strerror(errno));
-            // do not give too much information to the client,
-            // preferably don't give them the strerror
-            return send_page_plain(data->connection,
-                                   MHD_HTTP_INTERNAL_SERVER_ERROR,
-                                   "Could not load users");
-        }
-
-        if (fp != NULL) {
-            fseek(fp, 0, SEEK_END);
-            long file_size = ftell(fp);
-            users_count = (file_size / sizeof(user));
-            // setting users_count = users_cap would mean,
-            // that the array will be expanded on the next
-            // useradd
-            // allocating a bigger array right now will mean
-            // less allocations
-            users_cap += users_count;
-            nob_log(NOB_INFO, "Reading %zu users from file", users_count);
-        }
-
-        // users will also be allocated if the error is
-        // "No such file or directory"
-        users = calloc(users_cap, sizeof(user));
-        if (users == NULL) {
-            nob_log(NOB_ERROR, "Failed to add user: No more memory for user!");
-            return send_page_plain(data->connection,
-                                   MHD_HTTP_INTERNAL_SERVER_ERROR,
-                                   "No more memory");
-        }
-
-        if (fp != NULL) {
-            size_t items = fread(users, sizeof(user), users_count, fp);
-            if (items != users_count) {
-                nob_log(
-                    NOB_ERROR,
-                    "Failed to add user: Could load all users from disk. User "
-                    "count: %zu, read users: %zu",
-                    users_count, items);
-                return send_page_plain(data->connection,
-                                       MHD_HTTP_INTERNAL_SERVER_ERROR,
-                                       "Could load users");
-            }
-            fclose(fp);
-        }
-    } else if (users_count >= users_cap) {
+    if (users_count >= users_cap) {
         users_cap *= 2;
         users = realloc(users, users_cap * sizeof(user));
         if (users == NULL) {
@@ -101,18 +33,9 @@ enum MHD_Result endpoint_user_new_run(endpoint_data *data) {
                                    "No more memory");
         }
     }
-
-    for (size_t i = 0; i < users_count; i++) {
-        if (strncmp(users[i].username, current_user.username,
-                    MAX_POST_KEY_SIZE) == 0) {
-            nob_log(NOB_ERROR, "Failed to add user: User already exists!");
-            return send_page_plain(data->connection, MHD_HTTP_BAD_REQUEST,
-                                   "User already exists");
-        }
-    }
     users[users_count++] = current_user;
 
-    FILE *fp = fopen("justgit-users.bin", "wb");
+    FILE *fp = fopen(USER_FILE_NAME, "wb");
     if (fp == NULL) {
         nob_log(NOB_ERROR, "Failed to add user: Could not open file (%s)",
                 strerror(errno));
@@ -128,10 +51,12 @@ enum MHD_Result endpoint_user_new_run(endpoint_data *data) {
                 "Failed to add user: Could not save all users to disk. User "
                 "count: %zu, written users: %zu",
                 users_count, items);
+        fclose(fp);
         return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                                "Could not save user");
     }
     fclose(fp);
+    nob_log(NOB_INFO, "User added successfully");
 
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
 }
@@ -144,12 +69,77 @@ enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
     nob_log(NOB_INFO, "Processing post entry: %s, %s, %s, %s, %s", key,
             filename, content_type, transfer_encoding, data);
     if (strncmp(key, "username", MAX_POST_KEY_SIZE) == 0) {
+        if (users == NULL) {
+            FILE *fp = fopen(USER_FILE_NAME, "rb");
+            if (fp == NULL && errno != ENOENT) {
+                nob_log(
+                    NOB_ERROR,
+                    "Failed to add user: Could not open file for reading (%s)",
+                    strerror(errno));
+                // do not give too much information to the client,
+                // preferably don't give them the strerror
+                ep_data->post_failed = true;
+                ep_data->post_message = "Could not load users";
+                return MHD_NO;
+            }
+
+            if (fp != NULL) {
+                fseek(fp, 0, SEEK_END);
+                long file_size = ftell(fp);
+                // reset to start of fp
+                fseek(fp, 0, SEEK_SET);
+
+                users_count = (file_size / sizeof(user));
+                // setting users_count = users_cap would mean,
+                // that the array will be expanded on the next
+                // useradd
+                // allocating a bigger array right now will mean
+                // less allocations
+                users_cap += users_count;
+
+                nob_log(NOB_INFO, "Reading %zu users from file", users_count);
+            }
+
+            // users will also be allocated if the error is
+            // "No such file or directory"
+            users = calloc(users_cap, sizeof(user));
+            if (users == NULL) {
+                nob_log(NOB_ERROR,
+                        "Failed to add user: No more memory for user!");
+                ep_data->post_failed = true;
+                ep_data->post_message = "No more memory";
+                fclose(fp);
+                return MHD_NO;
+            }
+
+            if (fp != NULL) {
+                size_t items = fread(users, sizeof(user), users_count, fp);
+                if (items != users_count) {
+                    nob_log(NOB_ERROR,
+                            "Failed to add user: Could not load all users from "
+                            "disk. User "
+                            "count: %zu, read users: %zu",
+                            users_count, items);
+                    ep_data->post_failed = true;
+                    ep_data->post_message = "Could not load users";
+                    fclose(fp);
+                    return MHD_NO;
+                }
+                fclose(fp);
+            }
+        }
+
+        for (size_t i = 0; i < users_count; i++) {
+            if (strncmp(users[i].username, data, MAX_POST_KEY_SIZE) == 0) {
+                nob_log(NOB_ERROR, "Failed to add user: User already exists!");
+                ep_data->post_failed = true;
+                ep_data->post_message = "User already exists";
+                return MHD_NO;
+            }
+        }
+
         nob_log(NOB_INFO, "Copying username: %s", data);
         strncpy(current_user.username, data, MAX_POST_KEY_SIZE);
-        // TODO: Move user loading from endpoint_user_new_run()
-        //       to this place.
-        //       Reason: The server should not waste resources
-        //               for users that won't be added anyways.
         return MHD_YES;
     } else if (strncmp(key, "password", MAX_POST_KEY_SIZE) == 0) {
         nob_log(NOB_INFO, "Computing hash for: %s", data);
@@ -161,12 +151,13 @@ enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
                     "Out of memory while trying to compute hash for user: %s",
                     current_user.username);
             ep_data->post_failed = true;
+            ep_data->post_message = "No more memory";
             return MHD_NO;
         }
-        nob_log(NOB_INFO, "Hash computed: %s", current_user.password_hash);
         return MHD_YES;
     }
 
     ep_data->post_failed = true;
+    ep_data->post_message = "Unknown option";
     return MHD_NO;
 }
