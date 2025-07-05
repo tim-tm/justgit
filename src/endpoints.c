@@ -1,4 +1,4 @@
-#include "mingit.h"
+#include "main.h"
 
 // NOB_IMPLEMENTATION is already defined by mingit.c
 #include "../nob.h"

@@ -1,4 +1,4 @@
-#include "mingit.h"
+#include "main.h"
 
 enum MHD_Result send_page(struct MHD_Connection *connection,
                           unsigned int status_code, const char *message,
