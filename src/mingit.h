@@ -6,9 +6,6 @@
 // for reference
 #include <microhttpd.h>
 
-#define USAGE_STR "Usage: %s [-p PORT]\n"
-#define MAX_ENDPOINT_LEN 16
-
 typedef struct s_arguments {
     unsigned short port;
 } arguments;
@@ -22,6 +19,7 @@ typedef enum MHD_Result (*endpoint_function)(endpoint_data *data);
 
 typedef struct s_endpoint {
     const char *url;
+    const char *method;
     endpoint_function run;
 } endpoint;
 

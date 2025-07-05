@@ -9,8 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const endpoint endpoints[] = {{.url = "/", endpoint_root},
-                                     {.url = "/repo/new", endpoint_repo_new}};
+#define USAGE_STR "Usage: %s [-p PORT]\n"
+#define MAX_ENDPOINT_INFO_LEN 16
+
+static const endpoint endpoints[] = {{.url = "/", .method = "GET", .run = endpoint_root},
+                                     {.url = "/repo/new", .method = "POST", .run = endpoint_repo_new}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
 enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
@@ -24,7 +27,8 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
 
     nob_log(NOB_INFO, "%s, %s, %s", version, method, url);
     for (size_t i = 0; i < endpoints_len; i++) {
-        if (strncmp(endpoints[i].url, url, MAX_ENDPOINT_LEN) == 0) {
+        if (strncmp(endpoints[i].url, url, MAX_ENDPOINT_INFO_LEN) == 0 &&
+            strncmp(endpoints[i].method, method, MAX_ENDPOINT_INFO_LEN) == 0) {
             endpoint_data data = {.connection = connection, .method = method};
             return endpoints[i].run(&data);
         }
@@ -33,7 +37,15 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
     const char *page = "Not found";
     struct MHD_Response *response = MHD_create_response_from_buffer(
         9, (void *)page, MHD_RESPMEM_PERSISTENT);
-    int ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+
+    int ret;
+    if ((ret = MHD_add_response_header(response, "Content-Type",
+                                       "text/plain")) == MHD_NO) {
+        MHD_destroy_response(response);
+        return ret;
+    }
+
+    ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
     MHD_destroy_response(response);
     return ret;
 }
