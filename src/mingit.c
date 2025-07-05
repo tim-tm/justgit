@@ -9,45 +9,104 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define USAGE_STR "Usage: %s [-p PORT]\n"
-#define MAX_ENDPOINT_INFO_LEN 16
-
-static const endpoint endpoints[] = {{.url = "/", .method = "GET", .run = endpoint_root},
-                                     {.url = "/repo/new", .method = "POST", .run = endpoint_repo_new}};
+static const endpoint endpoints[] = {
+    {.url = "/",
+     .method = "GET",
+     .run = endpoint_root_run,
+     .iterate_post = NULL},
+    {.url = "/repo/new",
+     .method = "POST",
+     .run = endpoint_repo_new_run,
+     .iterate_post = endpoint_repo_new_process}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
+
+enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
+                             const char *key, const char *filename,
+                             const char *content_type,
+                             const char *transfer_encoding, const char *data,
+                             uint64_t off, size_t size) {
+    (void)(kind);
+    (void)(off);
+    (void)(size);
+
+    endpoint_data *ep_data = cls;
+    for (size_t i = 0; i < endpoints_len; i++) {
+        // Method check not required, we already know that its POST
+        if (strncmp(endpoints[i].url, ep_data->url, MAX_ENDPOINT_INFO_LEN) ==
+                0 &&
+            endpoints[i].iterate_post != NULL) {
+            return endpoints[i].iterate_post(key, filename, content_type,
+                                             transfer_encoding, data);
+        }
+    }
+
+    // just skip if there are no matching endpoints
+    return MHD_YES;
+}
 
 enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
                                   const char *url, const char *method,
                                   const char *version, const char *upload_data,
                                   size_t *upload_data_size, void **con_cls) {
     (void)(cls);
-    (void)(upload_data);
-    (void)(upload_data_size);
-    (void)(con_cls);
+
+    if (*con_cls == NULL) {
+        endpoint_data *data = malloc(sizeof(endpoint_data));
+        if (data == NULL) {
+            nob_log(NOB_ERROR, "Failed to allocate memory for connection! This "
+                               "should never happen.");
+            return MHD_NO;
+        }
+        data->connection = connection;
+        data->method = method;
+        data->url = url;
+
+        if (strncmp(method, "POST", MAX_ENDPOINT_INFO_LEN) == 0) {
+            data->postprocessor = MHD_create_post_processor(
+                connection, MAX_POST_SIZE, iterate_post, (void *)data);
+            if (data->postprocessor == NULL) {
+                free(data);
+                return MHD_NO;
+            }
+        }
+        *con_cls = (void *)data;
+        return MHD_YES;
+    }
+
+    endpoint_data *data = (endpoint_data *)*con_cls;
+    if (strncmp(method, "POST", MAX_ENDPOINT_INFO_LEN) == 0 &&
+        *upload_data_size != 0) {
+        MHD_post_process(data->postprocessor, upload_data, *upload_data_size);
+        *upload_data_size = 0;
+        return MHD_YES;
+    }
 
     nob_log(NOB_INFO, "%s, %s, %s", version, method, url);
     for (size_t i = 0; i < endpoints_len; i++) {
         if (strncmp(endpoints[i].url, url, MAX_ENDPOINT_INFO_LEN) == 0 &&
             strncmp(endpoints[i].method, method, MAX_ENDPOINT_INFO_LEN) == 0) {
-            endpoint_data data = {.connection = connection, .method = method};
-            return endpoints[i].run(&data);
+            return endpoints[i].run(data);
         }
     }
 
-    const char *page = "Not found";
-    struct MHD_Response *response = MHD_create_response_from_buffer(
-        9, (void *)page, MHD_RESPMEM_PERSISTENT);
+    return send_page_plain(connection, MHD_HTTP_NOT_FOUND, "Not found");
+}
 
-    int ret;
-    if ((ret = MHD_add_response_header(response, "Content-Type",
-                                       "text/plain")) == MHD_NO) {
-        MHD_destroy_response(response);
-        return ret;
-    }
+void request_completed(void *cls, struct MHD_Connection *connection,
+                       void **con_cls, enum MHD_RequestTerminationCode toe) {
+    (void)(cls);
+    (void)(connection);
+    (void)(toe);
 
-    ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
-    MHD_destroy_response(response);
-    return ret;
+    endpoint_data *data = *con_cls;
+    if (data == NULL)
+        return;
+
+    if (data->postprocessor)
+        MHD_destroy_post_processor(data->postprocessor);
+
+    free(data);
+    *con_cls = NULL;
 }
 
 int parse_arguments(const char *program_name, int argc, char **argv,
@@ -86,13 +145,15 @@ int main(int argc, char *argv[]) {
 
     struct MHD_Daemon *daemon =
         MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD, args.port, NULL, NULL,
-                         &handle_connection, NULL, MHD_OPTION_END);
+                         &handle_connection, NULL, MHD_OPTION_NOTIFY_COMPLETED,
+                         request_completed, NULL, MHD_OPTION_END);
     if (NULL == daemon) {
         nob_log(NOB_ERROR,
                 "Could not create server. You need elevated privilages "
                 "to run on any port below 1024.");
         return 1;
     }
+    nob_log(NOB_INFO, "Server up, hit <Enter> to exit.");
 
     getchar();
 

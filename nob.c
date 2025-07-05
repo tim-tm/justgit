@@ -12,6 +12,7 @@ int main(int argc, char *argv[])
     cmd_append(&cmd, "-std=c11");
     cmd_append(&cmd, "-pedantic");
     cmd_append(&cmd, "-Isrc");
+    nob_cc_inputs(&cmd, "src/utils.c");
     nob_cc_inputs(&cmd, "src/endpoints.c");
     nob_cc_inputs(&cmd, "src/mingit.c");
     nob_cc_output(&cmd, "mingit");
