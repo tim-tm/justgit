@@ -9,47 +9,33 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum MHD_Result endpoint_root(struct MHD_Connection *connection) {
-    const char *page = "{\"status\": \"ok\"}";
-
-    struct MHD_Response *response = MHD_create_response_from_buffer(
-        16, (void *)page, MHD_RESPMEM_PERSISTENT);
-
-    int ret;
-    if ((ret = MHD_add_response_header(response, "Content-Type",
-                                       "application/json")) == MHD_NO) {
-        MHD_destroy_response(response);
-        return ret;
-    }
-
-    if ((ret = MHD_add_response_header(response, "Access-Control-Allow-Origin",
-                                       "*")) == MHD_NO) {
-        MHD_destroy_response(response);
-        return ret;
-    }
-
-    ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-    MHD_destroy_response(response);
-    return ret;
-}
+static const endpoint endpoints[] = {{.url = "/", endpoint_root},
+                                     {.url = "/repo/new", endpoint_repo_new}};
+static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
 enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
                                   const char *url, const char *method,
                                   const char *version, const char *upload_data,
                                   size_t *upload_data_size, void **con_cls) {
     (void)(cls);
-    (void)(method);
-    (void)(version);
     (void)(upload_data);
     (void)(upload_data_size);
     (void)(con_cls);
 
+    nob_log(NOB_INFO, "%s, %s, %s", version, method, url);
     for (size_t i = 0; i < endpoints_len; i++) {
         if (strncmp(endpoints[i].url, url, MAX_ENDPOINT_LEN) == 0) {
-            return endpoints[i].run(connection);
+            endpoint_data data = {.connection = connection, .method = method};
+            return endpoints[i].run(&data);
         }
     }
-    return MHD_NO;
+
+    const char *page = "Not found";
+    struct MHD_Response *response = MHD_create_response_from_buffer(
+        9, (void *)page, MHD_RESPMEM_PERSISTENT);
+    int ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
+    MHD_destroy_response(response);
+    return ret;
 }
 
 int parse_arguments(const char *program_name, int argc, char **argv,

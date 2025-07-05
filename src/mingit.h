@@ -13,16 +13,19 @@ typedef struct s_arguments {
     unsigned short port;
 } arguments;
 
-typedef enum MHD_Result (*endpoint_function)(struct MHD_Connection *connection);
+typedef struct s_endpoint_data {
+    struct MHD_Connection *connection;
+    const char *method;
+} endpoint_data;
+
+typedef enum MHD_Result (*endpoint_function)(endpoint_data *data);
 
 typedef struct s_endpoint {
     const char *url;
     endpoint_function run;
 } endpoint;
 
-enum MHD_Result endpoint_root(struct MHD_Connection *connection);
-
-static const size_t endpoints_len = 1;
-static const endpoint endpoints[] = {{.url = "/", endpoint_root}};
+enum MHD_Result endpoint_root(endpoint_data *data);
+enum MHD_Result endpoint_repo_new(endpoint_data *data);
 
 #endif // !MINGIT_H

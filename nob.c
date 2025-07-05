@@ -12,9 +12,11 @@ int main(int argc, char *argv[])
     cmd_append(&cmd, "-std=c11");
     cmd_append(&cmd, "-pedantic");
     cmd_append(&cmd, "-Isrc");
+    nob_cc_inputs(&cmd, "src/endpoints.c");
     nob_cc_inputs(&cmd, "src/mingit.c");
     nob_cc_output(&cmd, "mingit");
     cmd_append(&cmd, "-lmicrohttpd");
+    cmd_append(&cmd, "-lgit2");
     if (!cmd_run_sync(cmd)) return false;
 
     nob_log(INFO, "Build finished!");
