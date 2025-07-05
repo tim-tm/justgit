@@ -14,10 +14,10 @@ static const endpoint endpoints[] = {
      .method = "GET",
      .run = endpoint_root_run,
      .iterate_post = NULL},
-    {.url = "/repo/new",
+    {.url = "/user/new",
      .method = "POST",
-     .run = endpoint_repo_new_run,
-     .iterate_post = endpoint_repo_new_process}};
+     .run = endpoint_user_new_run,
+     .iterate_post = endpoint_user_new_process}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
 enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
@@ -35,8 +35,8 @@ enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
         if (strncmp(endpoints[i].url, ep_data->url, MAX_ENDPOINT_INFO_LEN) ==
                 0 &&
             endpoints[i].iterate_post != NULL) {
-            return endpoints[i].iterate_post(key, filename, content_type,
-                                             transfer_encoding, data);
+            return endpoints[i].iterate_post(
+                ep_data, key, filename, content_type, transfer_encoding, data);
         }
     }
 
@@ -55,7 +55,8 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
         if (data == NULL) {
             nob_log(NOB_ERROR, "Failed to allocate memory for connection! This "
                                "should never happen.");
-            return MHD_NO;
+            return send_page_plain(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                   "Running out of memory");
         }
         data->connection = connection;
         data->method = method;
@@ -65,8 +66,13 @@ enum MHD_Result handle_connection(void *cls, struct MHD_Connection *connection,
             data->postprocessor = MHD_create_post_processor(
                 connection, MAX_POST_SIZE, iterate_post, (void *)data);
             if (data->postprocessor == NULL) {
+                nob_log(NOB_ERROR,
+                        "Failed to create POST-request processor. Likely due "
+                        "to an unsupported encoding or empty data.");
                 free(data);
-                return MHD_NO;
+                return send_page_plain(
+                    connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                    "Empty POST data or unsupported encoding");
             }
         }
         *con_cls = (void *)data;
@@ -157,6 +163,7 @@ int main(int argc, char *argv[]) {
 
     getchar();
 
+    nob_log(NOB_INFO, "Exiting...");
     MHD_stop_daemon(daemon);
     return 0;
 }

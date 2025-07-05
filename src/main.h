@@ -3,16 +3,20 @@
 
 #define _GNU_SOURCE
 #include <string.h>
+#include <stdbool.h>
 
 // See
 //   https://www.gnu.org/software/libmicrohttpd/manual/libmicrohttpd.html
 // for reference
 #include <microhttpd.h>
+#include <sodium.h>
 
 #define USAGE_STR "Usage: %s [-p PORT]\n"
 #define MAX_ENDPOINT_INFO_LEN 16
 #define MAX_POST_SIZE 512
 #define MAX_PAGE_SIZE 65536
+#define MAX_POST_KEY_SIZE 64
+#define MAX_POST_DATA_SIZE 448
 
 typedef struct s_arguments {
     unsigned short port;
@@ -23,14 +27,13 @@ typedef struct s_endpoint_data {
     const char *method;
     const char *url;
     struct MHD_PostProcessor *postprocessor;
+    bool post_failed;
 } endpoint_data;
 
 typedef enum MHD_Result (*endpoint_func_run)(endpoint_data *data);
-typedef enum MHD_Result (*endpoint_func_post)(const char *key,
-                                              const char *filename,
-                                              const char *content_type,
-                                              const char *transfer_encoding,
-                                              const char *data);
+typedef enum MHD_Result (*endpoint_func_post)(
+    endpoint_data *up_data, const char *key, const char *filename,
+    const char *content_type, const char *transfer_encoding, const char *data);
 
 typedef struct s_endpoint {
     const char *url;
@@ -38,6 +41,11 @@ typedef struct s_endpoint {
     endpoint_func_run run;
     endpoint_func_post iterate_post;
 } endpoint;
+
+typedef struct s_user {
+    char username[MAX_POST_KEY_SIZE];
+    char password_hash[crypto_pwhash_STRBYTES];
+} user;
 
 // defined in utils.c
 enum MHD_Result send_page(struct MHD_Connection *connection,
@@ -50,8 +58,9 @@ enum MHD_Result send_page_plain(struct MHD_Connection *connection,
 // defined in endpoints.c
 enum MHD_Result endpoint_root_run(endpoint_data *data);
 
-enum MHD_Result endpoint_repo_new_run(endpoint_data *data);
-enum MHD_Result endpoint_repo_new_process(const char *key, const char *filename,
+enum MHD_Result endpoint_user_new_run(endpoint_data *data);
+enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
+                                          const char *key, const char *filename,
                                           const char *content_type,
                                           const char *transfer_encoding,
                                           const char *data);

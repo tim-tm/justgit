@@ -18,6 +18,7 @@ int main(int argc, char *argv[])
     nob_cc_output(&cmd, "justgit");
     cmd_append(&cmd, "-lmicrohttpd");
     cmd_append(&cmd, "-lgit2");
+    cmd_append(&cmd, "-lsodium");
     if (!cmd_run_sync(cmd)) return false;
 
     nob_log(INFO, "Build finished!");
