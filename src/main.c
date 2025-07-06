@@ -9,19 +9,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const endpoint endpoints[] = {
-    {.url = "/",
-     .method = "GET",
-     .run = endpoint_root_run,
-     .iterate_post = NULL},
-    {.url = "/user/new",
-     .method = "POST",
-     .run = endpoint_user_new_run,
-     .iterate_post = endpoint_user_new_process},
-    {.url = "/repo/new",
-     .method = "POST",
-     .run = endpoint_repo_new_run,
-     .iterate_post = endpoint_repo_new_process}};
+static const endpoint endpoints[] = {{.url = "/",
+                                      .method = "GET",
+                                      .run = endpoint_root_run,
+                                      .iterate_post = NULL,
+                                      .authenticate = NULL},
+                                     {.url = "/user/new",
+                                      .method = "POST",
+                                      .run = endpoint_user_new_run,
+                                      .iterate_post = endpoint_user_new_process,
+                                      .authenticate = NULL},
+                                     {.url = "/repo/new",
+                                      .method = "POST",
+                                      .run = endpoint_repo_new_run,
+                                      .iterate_post = endpoint_repo_new_process,
+                                      .authenticate = endpoint_generic_auth}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
 static enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
@@ -69,6 +71,26 @@ handle_connection(void *cls, struct MHD_Connection *connection, const char *url,
         data->url = url;
         data->post_failed = false;
         data->post_message = NULL;
+
+        char *pass = NULL;
+        char *user =
+            MHD_basic_auth_get_username_password(data->connection, &pass);
+        // not all endpoints required authentication
+        // just save the authentication right here (if present)
+        // and leave the handling up to the endpoints
+        data->auth = (basic_auth){.username = user, .password = pass};
+
+        for (size_t i = 0; i < endpoints_len; i++) {
+            if (strncmp(endpoints[i].url, url, MAX_ENDPOINT_INFO_LEN) == 0 &&
+                strncmp(endpoints[i].method, method, MAX_ENDPOINT_INFO_LEN) ==
+                    0) {
+                enum MHD_Result ret;
+                if (endpoints[i].authenticate != NULL &&
+                    (ret = endpoints[i].authenticate(data)) != MHD_YES) {
+                    return ret;
+                }
+            }
+        }
 
         if (strncmp(method, "POST", MAX_ENDPOINT_INFO_LEN) == 0) {
             data->postprocessor = MHD_create_post_processor(
@@ -119,6 +141,11 @@ static void request_completed(void *cls, struct MHD_Connection *connection,
 
     if (data->postprocessor)
         MHD_destroy_post_processor(data->postprocessor);
+
+    if (data->auth.username)
+        MHD_free(data->auth.username);
+    if (data->auth.password)
+        MHD_free(data->auth.password);
 
     free(data);
     *con_cls = NULL;

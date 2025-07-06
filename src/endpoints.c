@@ -4,11 +4,25 @@
 #include "../nob.h"
 #include <git2.h>
 
+// TODO: heavy refactoring:
+//          - users and repos could be merged into a
+//            single binary file, that contains a bit of
+//            metadata at the start (e.g. users_count, repos_count)
+//          - load_users, load_repos can basically be merged
+//            into a single, more abstract function,
+//            e.g. load_data(ep_data, data_ptr, offset, count, struct_size)
+//          - user hashtable would greatly improve performance
+
 static user *users = NULL;
 static size_t users_cap = 256;
 static size_t users_count = 0;
 
+static repo *repos = NULL;
+static size_t repos_cap = 256;
+static size_t repos_count = 0;
+
 static user current_user = {0};
+static repo current_repo = {0};
 
 static enum MHD_Result load_users(endpoint_data *ep_data) {
     if (users == NULL) {
@@ -72,6 +86,143 @@ static enum MHD_Result load_users(endpoint_data *ep_data) {
     return MHD_YES;
 }
 
+static enum MHD_Result load_repos(endpoint_data *ep_data) {
+    if (repos == NULL) {
+        FILE *fp = fopen(REPO_FILE_NAME, "rb");
+        if (fp == NULL && errno != ENOENT) {
+            nob_log(NOB_ERROR,
+                    "Failed to add repo: Could not open file for reading (%s)",
+                    strerror(errno));
+            // do not give too much information to the client,
+            // preferably don't give them the strerror
+            ep_data->post_failed = true;
+            ep_data->post_message = "Could not load repos";
+            return MHD_NO;
+        }
+
+        if (fp != NULL) {
+            fseek(fp, 0, SEEK_END);
+            long file_size = ftell(fp);
+            // reset to start of fp
+            fseek(fp, 0, SEEK_SET);
+
+            repos_count = (file_size / sizeof(repo));
+            // setting repos_count = repos_cap would mean,
+            // that the array will be expanded on the next
+            // repoadd
+            // allocating a bigger array right now will mean
+            // less allocations
+            repos_cap += repos_count;
+
+            nob_log(NOB_INFO, "Reading %zu repos from file", repos_count);
+        }
+
+        // repos will also be allocated if the error is
+        // "No such file or directory"
+        repos = calloc(repos_cap, sizeof(repo));
+        if (repos == NULL) {
+            nob_log(NOB_ERROR, "Failed to add repo: No more memory for repo!");
+            ep_data->post_failed = true;
+            ep_data->post_message = "No more memory";
+            fclose(fp);
+            return MHD_NO;
+        }
+
+        if (fp != NULL) {
+            size_t items = fread(repos, sizeof(repo), repos_count, fp);
+            if (items != repos_count) {
+                nob_log(NOB_ERROR,
+                        "Failed to add repo: Could not load all repos from "
+                        "disk. User "
+                        "count: %zu, read repos: %zu",
+                        repos_count, items);
+                ep_data->post_failed = true;
+                ep_data->post_message = "Could not load repos";
+                fclose(fp);
+                return MHD_NO;
+            }
+            fclose(fp);
+        }
+    }
+    ep_data->post_failed = false;
+    return MHD_YES;
+}
+
+static result authenticate(endpoint_data *data) {
+    if (data->auth.username == NULL || data->auth.password == NULL)
+        return (result){.failed = true,
+                        .status = send_page_plain(data->connection,
+                                                  MHD_HTTP_UNAUTHORIZED,
+                                                  "unauthorized")};
+
+    nob_log(NOB_INFO, "Authorizing: %s", data->auth.username);
+    if (load_users(data) == MHD_NO) {
+        nob_log(NOB_INFO, "Could not load users: %s", data->post_message);
+        return (result){.failed = true,
+                        .status = send_page_plain(
+                            data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                            "Could not load users")};
+    }
+
+    nob_log(NOB_INFO, "users_count=%zu", users_count);
+
+    size_t uid;
+    bool found = false;
+    for (uid = 0; uid < users_count; uid++) {
+        if (strncmp(users[uid].username, data->auth.username,
+                    MAX_POST_KEY_SIZE) == 0) {
+            nob_log(NOB_INFO, "Found user: uid=%zu", uid);
+            current_user = users[uid];
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        nob_log(NOB_ERROR, "Could not find user");
+        return (result){.failed = true,
+                        .status = send_page_plain(data->connection,
+                                                  MHD_HTTP_UNAUTHORIZED,
+                                                  "Could not find user")};
+    }
+
+    nob_log(NOB_INFO, "Checking password...");
+    size_t pass_len = strnlen(data->auth.password, MAX_POST_DATA_SIZE);
+    if (crypto_pwhash_str_verify(users[uid].password_hash, data->auth.password,
+                                 pass_len) != 0) {
+        nob_log(NOB_ERROR, "Invalid password");
+        return (result){.failed = true,
+                        .status = send_page_plain(data->connection,
+                                                  MHD_HTTP_UNAUTHORIZED,
+                                                  "Invalid password")};
+    }
+    nob_log(NOB_INFO, "Check passed");
+    return (result){.failed = false, .status = MHD_YES};
+}
+
+enum MHD_Result endpoint_generic_auth(endpoint_data *data) {
+    result res;
+    if ((res = authenticate(data)).failed)
+        return res.status;
+    return MHD_YES;
+}
+
+static result append_array(struct MHD_Connection *connection, void *arr,
+                           size_t count, size_t cap) {
+    if (count >= cap) {
+        cap *= 2;
+        arr = realloc(arr, cap * sizeof(user));
+        if (arr == NULL) {
+            nob_log(NOB_ERROR, "Failed to append array: no more memory");
+            return (result){.failed = true,
+                            .status = send_page_plain(
+                                connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                                "No more memory")};
+        }
+    }
+    return (result){.failed = false, .status = MHD_YES};
+}
+
 enum MHD_Result endpoint_root_run(endpoint_data *data) {
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
 }
@@ -85,16 +236,10 @@ enum MHD_Result endpoint_user_new_run(endpoint_data *data) {
     }
 
     nob_log(NOB_INFO, "Adding user: %s", current_user.username);
-    if (users_count >= users_cap) {
-        users_cap *= 2;
-        users = realloc(users, users_cap * sizeof(user));
-        if (users == NULL) {
-            nob_log(NOB_ERROR, "Failed to add user: No more memory for user!");
-            return send_page_plain(data->connection,
-                                   MHD_HTTP_INTERNAL_SERVER_ERROR,
-                                   "No more memory");
-        }
-    }
+    result res;
+    if ((res = append_array(data->connection, users, users_count, users_cap))
+            .failed)
+        return res.status;
     users[users_count++] = current_user;
 
     FILE *fp = fopen(USER_FILE_NAME, "wb");
@@ -170,41 +315,43 @@ enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
 }
 
 enum MHD_Result endpoint_repo_new_run(endpoint_data *data) {
-    // TODO: refactor auth to a separate function
-    char *pass = NULL;
-    const char *user =
-        MHD_basic_auth_get_username_password(data->connection, &pass);
-
-    if (user == NULL)
-        return send_page_plain(data->connection, MHD_HTTP_UNAUTHORIZED,
-                               "unauthorized");
-
-    nob_log(NOB_INFO, "Authorizing: %s", user);
-    load_users(data);
-    nob_log(NOB_INFO, "users_count=%zu", users_count);
-
-    size_t uid;
-    bool found = false;
-    for (uid = 0; uid < users_count; uid++) {
-        if (strncmp(users[uid].username, user, MAX_POST_KEY_SIZE) == 0) {
-            nob_log(NOB_INFO, "Found user: uid=%zu", uid);
-            found = true;
-            break;
-        }
+    if (data->post_failed || current_repo.name[0] == '\0') {
+        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                               data->post_message == NULL ? "Invalid POST-data"
+                                                          : data->post_message);
     }
 
-    if (!found)
-        return send_page_plain(data->connection, MHD_HTTP_UNAUTHORIZED,
-                               "Could not find user");
+    nob_log(NOB_INFO, "Adding repo: %s", current_repo.name);
+    // TODO: use libgit2 to actually create the repo right here
 
-    nob_log(NOB_INFO, "Checking password...");
-    size_t pass_len = strnlen(pass, MAX_POST_DATA_SIZE);
-    if (crypto_pwhash_str_verify(users[uid].password_hash, pass, pass_len) !=
-        0) {
-        nob_log(NOB_ERROR, "Invalid password");
-        return send_page_plain(data->connection, MHD_HTTP_UNAUTHORIZED,
-                               "Invalid password");
+    result res;
+    if ((res = append_array(data->connection, repos, repos_count, repos_cap))
+            .failed)
+        return res.status;
+    repos[repos_count++] = current_repo;
+
+    FILE *fp = fopen(REPO_FILE_NAME, "wb");
+    if (fp == NULL) {
+        nob_log(NOB_ERROR, "Failed to add repo: Could not open file (%s)",
+                strerror(errno));
+        // do not give too much information to the client,
+        // preferably don't give them the strerror
+        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                               "Could not save repo");
     }
+
+    size_t items = fwrite(repos, sizeof(repo), repos_count, fp);
+    if (items != repos_count) {
+        nob_log(NOB_ERROR,
+                "Failed to add repo: Could not save all repos to disk. Repo "
+                "count: %zu, written repos: %zu",
+                repos_count, items);
+        fclose(fp);
+        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                               "Could not save repo");
+    }
+    fclose(fp);
+    nob_log(NOB_INFO, "Repo added successfully");
 
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
 }
@@ -217,8 +364,41 @@ enum MHD_Result endpoint_repo_new_process(endpoint_data *ep_data,
     nob_log(NOB_INFO, "Processing post entry: %s, %s, %s, %s, %s", key,
             filename, content_type, transfer_encoding, data);
     if (strncmp(key, "name", MAX_POST_KEY_SIZE) == 0) {
-        // TODO: implement repo creation and save repos with a bindump (just
-        //       like the users)
+        if (load_repos(ep_data) == MHD_NO)
+            return MHD_NO;
+
+        nob_log(NOB_INFO, "current_user='%s'", current_user.username);
+        // FIXME: This is way too slow
+        size_t uid;
+        bool found = false;
+        for (uid = 0; uid < users_count; uid++) {
+            // current_user should be defined by endpoint_generic_auth,
+            // which is called before this function
+            if (strncmp(users[uid].username, current_user.username,
+                        MAX_POST_KEY_SIZE) == 0) {
+                found = true;
+                break;
+            }
+        }
+
+        // NOTE: This should never happen
+        if (!found) {
+            ep_data->post_failed = true;
+            ep_data->post_message = "Current user not found";
+            return MHD_NO;
+        }
+
+        for (size_t i = 0; i < repos_count; i++) {
+            if (repos[i].uid == uid &&
+                strncmp(repos[i].name, data, MAX_POST_KEY_SIZE) == 0) {
+                ep_data->post_failed = true;
+                ep_data->post_message = "Repo already exists";
+                return MHD_NO;
+            }
+        }
+
+        strncpy(current_repo.name, data, MAX_POST_KEY_SIZE);
+        return MHD_YES;
     }
 
     ep_data->post_failed = true;
