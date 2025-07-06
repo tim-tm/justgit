@@ -68,4 +68,11 @@ enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
                                           const char *transfer_encoding,
                                           const char *data);
 
+enum MHD_Result endpoint_repo_new_run(endpoint_data *data);
+enum MHD_Result endpoint_repo_new_process(endpoint_data *ep_data,
+                                          const char *key, const char *filename,
+                                          const char *content_type,
+                                          const char *transfer_encoding,
+                                          const char *data);
+
 #endif // !MAIN_H

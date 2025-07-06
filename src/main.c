@@ -17,7 +17,11 @@ static const endpoint endpoints[] = {
     {.url = "/user/new",
      .method = "POST",
      .run = endpoint_user_new_run,
-     .iterate_post = endpoint_user_new_process}};
+     .iterate_post = endpoint_user_new_process},
+    {.url = "/repo/new",
+     .method = "POST",
+     .run = endpoint_repo_new_run,
+     .iterate_post = endpoint_repo_new_process}};
 static const size_t endpoints_len = sizeof(endpoints) / sizeof(endpoint);
 
 static enum MHD_Result iterate_post(void *cls, enum MHD_ValueKind kind,
