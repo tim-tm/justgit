@@ -3,10 +3,6 @@
 // NOB_IMPLEMENTATION is already defined by main.c
 #include "../nob.h"
 
-#include <dirent.h>
-#include <pwd.h>
-#include <unistd.h>
-
 // TODO: heavy refactoring:
 //          - users and repos could be merged into a
 //            single binary file, that contains a bit of
@@ -203,56 +199,6 @@ static result authenticate(endpoint_data *data) {
     return (result){.failed = false, .status = MHD_YES};
 }
 
-static int chown_dir(const char *path, uid_t owner, gid_t group) {
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
-        nob_log(NOB_ERROR, "chown_dir: Cannot open directory %s, reason: %s",
-                path, strerror(errno));
-        return -1;
-    }
-
-    char filename[PATH_MAX];
-    struct dirent *dp;
-    while ((dp = readdir(dir)) != NULL) {
-        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
-            continue;
-
-        memset(filename, 0, PATH_MAX);
-        snprintf(filename, PATH_MAX, "%s/%s", path, dp->d_name);
-
-        struct stat stbuf;
-        if (stat(filename, &stbuf) != 0) {
-            nob_log(NOB_ERROR, "chown_dir: Cannot stat file %s, reason: %s",
-                    filename, strerror(errno));
-            return -1;
-        }
-
-        if (chown(filename, owner, group) != 0) {
-            nob_log(NOB_ERROR,
-                    "chown_dir: Failed to give user with id '%d' permissions "
-                    "to access %s.",
-                    owner, filename);
-            return -1;
-        }
-
-        if ((stbuf.st_mode & S_IFMT) == S_IFDIR &&
-            chown_dir(filename, owner, group) != 0) {
-            nob_log(NOB_ERROR, "chown_dir: Recursive call failed");
-            return -1;
-        }
-    }
-
-    // finally also chown the top-level directory
-    if (chown(path, owner, group) != 0) {
-        nob_log(NOB_ERROR,
-                "chown_dir: Failed to give user with id '%d' permissions "
-                "to access %s.",
-                owner, path);
-        return -1;
-    }
-    return 0;
-}
-
 enum MHD_Result endpoint_generic_auth(endpoint_data *data) {
     result res;
     if ((res = authenticate(data)).failed)
@@ -378,12 +324,11 @@ enum MHD_Result endpoint_repo_new_run(endpoint_data *data) {
 
     // get the "git" user before creating the repository so it
     // is not needed to remove the directory if getting the user fails
-    const char *git_user_name = "git";
-    nob_log(NOB_INFO, "Getting information for user '%s'", git_user_name);
-    struct passwd *git_user_passwd = getpwnam(git_user_name);
+    nob_log(NOB_INFO, "Getting information for user '%s'", GIT_USER_NAME);
+    struct passwd *git_user_passwd = getpwnam(GIT_USER_NAME);
     if (git_user_passwd == NULL) {
         nob_log(NOB_ERROR, "Failed to get information for user '%s'.",
-                git_user_name);
+                GIT_USER_NAME);
         return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                                "Could not create git repository");
     }
@@ -404,7 +349,7 @@ enum MHD_Result endpoint_repo_new_run(endpoint_data *data) {
     if (chown_dir(reponame, git_user_passwd->pw_uid, git_user_passwd->pw_gid) !=
         0) {
         nob_log(NOB_ERROR, "Failed to give user '%s' permissions to access %s.",
-                git_user_name, reponame);
+                GIT_USER_NAME, reponame);
         return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                                "Could not create git repository");
     }

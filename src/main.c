@@ -179,7 +179,8 @@ static int parse_arguments(const char *program_name, int argc, char **argv,
 
 int main(int argc, char *argv[]) {
     if (geteuid() != 0) {
-        nob_log(NOB_ERROR, "justgit needs root-permissions to manage git repositories.");
+        nob_log(NOB_ERROR,
+                "justgit needs root-permissions to manage git repositories.");
         return 1;
     }
 
@@ -189,7 +190,8 @@ int main(int argc, char *argv[]) {
         if (parse_arguments(program_name, argc, argv, &args) != 0)
             return 1;
     }
-    nob_log(NOB_INFO, "Creating working directory '%s' if it does not exist.", WORKING_DIR);
+    nob_log(NOB_INFO, "Creating working directory '%s' if it does not exist.",
+            WORKING_DIR);
     nob_mkdir_if_not_exists(WORKING_DIR);
 
     nob_log(NOB_INFO, "Using port %d", args.port);

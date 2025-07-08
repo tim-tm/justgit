@@ -4,6 +4,8 @@
 #define _GNU_SOURCE
 #include <string.h>
 #include <stdbool.h>
+#include <pwd.h>
+#include <unistd.h>
 
 // See
 //   https://www.gnu.org/software/libmicrohttpd/manual/libmicrohttpd.html
@@ -23,6 +25,7 @@
 #define WORKING_DIR "/srv/git"
 #define USER_FILE_NAME "/srv/git/justgit-users.bin"
 #define REPO_FILE_NAME "/srv/git/justgit-repos.bin"
+#define GIT_USER_NAME "git"
 
 typedef struct s_arguments {
     unsigned short port;
@@ -80,6 +83,7 @@ enum MHD_Result send_page(struct MHD_Connection *connection,
                           const char *content_type);
 enum MHD_Result send_page_plain(struct MHD_Connection *connection,
                                 unsigned int status_code, const char *message);
+int chown_dir(const char *path, uid_t owner, gid_t group);
 
 // endpoint handling functions
 // defined in endpoints.c
