@@ -4,28 +4,21 @@
 #include "../nob.h"
 
 // TODO: heavy refactoring:
-//          - users and repos could be merged into a
-//            single binary file, that contains a bit of
-//            metadata at the start (e.g. users_count, repos_count)
-//          - load_users, load_repos can basically be merged
-//            into a single, more abstract function,
-//            e.g. load_data(ep_data, data_ptr, offset, count, struct_size)
 //          - user hashtable would greatly improve performance
 
 static user *users = NULL;
 static size_t users_cap = 256;
-static size_t users_count = 0;
 
 static repo *repos = NULL;
 static size_t repos_cap = 256;
-static size_t repos_count = 0;
 
+static metadata current_metadata[1];
 static user current_user = {0};
 static repo current_repo = {0};
 
-static enum MHD_Result load_users(endpoint_data *ep_data) {
+static enum MHD_Result load_data(endpoint_data *ep_data) {
     if (users == NULL) {
-        FILE *fp = fopen(USER_FILE_NAME, "rb");
+        FILE *fp = fopen(DATA_FILE_NAME, "rb");
         if (fp == NULL && errno != ENOENT) {
             nob_log(NOB_ERROR,
                     "Failed to add user: Could not open file for reading (%s)",
@@ -38,20 +31,18 @@ static enum MHD_Result load_users(endpoint_data *ep_data) {
         }
 
         if (fp != NULL) {
-            fseek(fp, 0, SEEK_END);
-            long file_size = ftell(fp);
-            // reset to start of fp
-            fseek(fp, 0, SEEK_SET);
-
-            users_count = (file_size / sizeof(user));
-            // setting users_count = users_cap would mean,
-            // that the array will be expanded on the next
-            // useradd
-            // allocating a bigger array right now will mean
-            // less allocations
-            users_cap += users_count;
-
-            nob_log(NOB_INFO, "Reading %zu users from file", users_count);
+            size_t items = fread(current_metadata, sizeof(metadata), 1, fp);
+            if (items != 1) {
+                nob_log(
+                    NOB_ERROR,
+                    "Failed to add user: Could not load metadata from disk.");
+                ep_data->post_failed = true;
+                ep_data->post_message = "Could not load users";
+                fclose(fp);
+                return MHD_NO;
+            }
+            nob_log(NOB_INFO, "Reading %zu users from file",
+                    current_metadata->users_count);
         }
 
         // users will also be allocated if the error is
@@ -63,57 +54,6 @@ static enum MHD_Result load_users(endpoint_data *ep_data) {
             ep_data->post_message = "No more memory";
             fclose(fp);
             return MHD_NO;
-        }
-
-        if (fp != NULL) {
-            size_t items = fread(users, sizeof(user), users_count, fp);
-            if (items != users_count) {
-                nob_log(NOB_ERROR,
-                        "Failed to add user: Could not load all users from "
-                        "disk. User "
-                        "count: %zu, read users: %zu",
-                        users_count, items);
-                ep_data->post_failed = true;
-                ep_data->post_message = "Could not load users";
-                fclose(fp);
-                return MHD_NO;
-            }
-            fclose(fp);
-        }
-    }
-    ep_data->post_failed = false;
-    return MHD_YES;
-}
-
-static enum MHD_Result load_repos(endpoint_data *ep_data) {
-    if (repos == NULL) {
-        FILE *fp = fopen(REPO_FILE_NAME, "rb");
-        if (fp == NULL && errno != ENOENT) {
-            nob_log(NOB_ERROR,
-                    "Failed to add repo: Could not open file for reading (%s)",
-                    strerror(errno));
-            // do not give too much information to the client,
-            // preferably don't give them the strerror
-            ep_data->post_failed = true;
-            ep_data->post_message = "Could not load repos";
-            return MHD_NO;
-        }
-
-        if (fp != NULL) {
-            fseek(fp, 0, SEEK_END);
-            long file_size = ftell(fp);
-            // reset to start of fp
-            fseek(fp, 0, SEEK_SET);
-
-            repos_count = (file_size / sizeof(repo));
-            // setting repos_count = repos_cap would mean,
-            // that the array will be expanded on the next
-            // repoadd
-            // allocating a bigger array right now will mean
-            // less allocations
-            repos_cap += repos_count;
-
-            nob_log(NOB_INFO, "Reading %zu repos from file", repos_count);
         }
 
         // repos will also be allocated if the error is
@@ -128,13 +68,33 @@ static enum MHD_Result load_repos(endpoint_data *ep_data) {
         }
 
         if (fp != NULL) {
-            size_t items = fread(repos, sizeof(repo), repos_count, fp);
-            if (items != repos_count) {
+            fseek(fp, sizeof(metadata), SEEK_SET);
+            size_t items =
+                fread(users, sizeof(user), current_metadata->users_count, fp);
+            if (items != current_metadata->users_count) {
+                nob_log(NOB_ERROR,
+                        "Failed to add user: Could not load all users from "
+                        "disk. User "
+                        "count: %zu, read users: %zu",
+                        current_metadata->users_count, items);
+                ep_data->post_failed = true;
+                ep_data->post_message = "Could not load users";
+                fclose(fp);
+                return MHD_NO;
+            }
+
+            fseek(fp,
+                  sizeof(metadata) +
+                      (current_metadata->users_count * sizeof(user)),
+                  SEEK_SET);
+            items =
+                fread(repos, sizeof(repo), current_metadata->repos_count, fp);
+            if (items != current_metadata->repos_count) {
                 nob_log(NOB_ERROR,
                         "Failed to add repo: Could not load all repos from "
                         "disk. User "
                         "count: %zu, read repos: %zu",
-                        repos_count, items);
+                        current_metadata->repos_count, items);
                 ep_data->post_failed = true;
                 ep_data->post_message = "Could not load repos";
                 fclose(fp);
@@ -155,7 +115,7 @@ static result authenticate(endpoint_data *data) {
                                                   "unauthorized")};
 
     nob_log(NOB_INFO, "Authorizing: %s", data->auth.username);
-    if (load_users(data) == MHD_NO) {
+    if (load_data(data) == MHD_NO) {
         nob_log(NOB_INFO, "Could not load users: %s", data->post_message);
         return (result){.failed = true,
                         .status = send_page_plain(
@@ -163,11 +123,11 @@ static result authenticate(endpoint_data *data) {
                             "Could not load users")};
     }
 
-    nob_log(NOB_INFO, "users_count=%zu", users_count);
+    nob_log(NOB_INFO, "users_count=%zu", current_metadata->users_count);
 
     size_t uid;
     bool found = false;
-    for (uid = 0; uid < users_count; uid++) {
+    for (uid = 0; uid < current_metadata->users_count; uid++) {
         if (strncmp(users[uid].username, data->auth.username,
                     MAX_POST_KEY_SIZE) == 0) {
             nob_log(NOB_INFO, "Found user: uid=%zu", uid);
@@ -199,11 +159,72 @@ static result authenticate(endpoint_data *data) {
     return (result){.failed = false, .status = MHD_YES};
 }
 
-enum MHD_Result endpoint_generic_auth(endpoint_data *data) {
-    result res;
-    if ((res = authenticate(data)).failed)
-        return res.status;
-    return MHD_YES;
+static void free_data(void) {
+    if (users)
+        free(users);
+    if (repos)
+        free(repos);
+}
+
+static result write_data(endpoint_data *data) {
+    FILE *fp = fopen(DATA_FILE_NAME, "wb");
+    if (fp == NULL) {
+        nob_log(NOB_ERROR, "Failed to save data: Could not open file (%s)",
+                strerror(errno));
+        // do not give too much information to the client,
+        // preferably don't give them the strerror
+        free_data();
+        return (result){.failed = true,
+                        .status = send_page_plain(
+                            data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                            "Could not save data")};
+    }
+
+    size_t items = fwrite(current_metadata, sizeof(metadata), 1, fp);
+    if (items != 1) {
+        nob_log(NOB_ERROR,
+                "Failed to save data: Could not save metadata to disk.");
+        fclose(fp);
+        free_data();
+        return (result){.failed = true,
+                        .status = send_page_plain(
+                            data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                            "Could not save data")};
+    }
+
+    fseek(fp, sizeof(metadata), SEEK_SET);
+    items = fwrite(users, sizeof(user), current_metadata->users_count, fp);
+    if (items != current_metadata->users_count) {
+        nob_log(NOB_ERROR,
+                "Failed to save data: Could not save all users to disk. User "
+                "count: %zu, written users: %zu",
+                current_metadata->users_count, items);
+        fclose(fp);
+        free_data();
+        return (result){.failed = true,
+                        .status = send_page_plain(
+                            data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                            "Could not save users")};
+    }
+
+    fseek(fp, sizeof(metadata) + (current_metadata->users_count * sizeof(user)),
+          SEEK_SET);
+    items = fwrite(repos, sizeof(repo), current_metadata->repos_count, fp);
+    if (items != current_metadata->repos_count) {
+        nob_log(NOB_ERROR,
+                "Failed to add repo: Could not save all repos to disk. Repo "
+                "count: %zu, written repos: %zu",
+                current_metadata->repos_count, items);
+        fclose(fp);
+        free_data();
+        return (result){.failed = true,
+                        .status = send_page_plain(
+                            data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
+                            "Could not save repos")};
+    }
+    fclose(fp);
+    free_data();
+    return (result){.failed = false, .status = MHD_YES};
 }
 
 static result append_array(struct MHD_Connection *connection, void *arr,
@@ -222,6 +243,13 @@ static result append_array(struct MHD_Connection *connection, void *arr,
     return (result){.failed = false, .status = MHD_YES};
 }
 
+enum MHD_Result endpoint_generic_auth(endpoint_data *data) {
+    result res;
+    if ((res = authenticate(data)).failed)
+        return res.status;
+    return MHD_YES;
+}
+
 enum MHD_Result endpoint_root_run(endpoint_data *data) {
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
 }
@@ -236,32 +264,16 @@ enum MHD_Result endpoint_user_new_run(endpoint_data *data) {
 
     nob_log(NOB_INFO, "Adding user: %s", current_user.username);
     result res;
-    if ((res = append_array(data->connection, users, users_count, users_cap))
+    if ((res = append_array(data->connection, users,
+                            current_metadata->users_count, users_cap))
             .failed)
         return res.status;
-    users[users_count++] = current_user;
 
-    FILE *fp = fopen(USER_FILE_NAME, "wb");
-    if (fp == NULL) {
-        nob_log(NOB_ERROR, "Failed to add user: Could not open file (%s)",
-                strerror(errno));
-        // do not give too much information to the client,
-        // preferably don't give them the strerror
-        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
-                               "Could not save user");
-    }
+    users[current_metadata->users_count++] = current_user;
 
-    size_t items = fwrite(users, sizeof(user), users_count, fp);
-    if (items != users_count) {
-        nob_log(NOB_ERROR,
-                "Failed to add user: Could not save all users to disk. User "
-                "count: %zu, written users: %zu",
-                users_count, items);
-        fclose(fp);
-        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
-                               "Could not save user");
-    }
-    fclose(fp);
+    if ((res = write_data(data)).failed)
+        return res.status;
+
     nob_log(NOB_INFO, "User added successfully");
 
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
@@ -277,10 +289,10 @@ enum MHD_Result endpoint_user_new_process(endpoint_data *ep_data,
     (void)(transfer_encoding);
 
     if (strncmp(key, "username", MAX_POST_KEY_SIZE) == 0) {
-        if (load_users(ep_data) == MHD_NO)
+        if (load_data(ep_data) == MHD_NO)
             return MHD_NO;
 
-        for (size_t i = 0; i < users_count; i++) {
+        for (size_t i = 0; i < current_metadata->users_count; i++) {
             if (strncmp(users[i].username, data, MAX_POST_KEY_SIZE) == 0) {
                 nob_log(NOB_ERROR, "Failed to add user: User already exists!");
                 ep_data->post_failed = true;
@@ -355,32 +367,16 @@ enum MHD_Result endpoint_repo_new_run(endpoint_data *data) {
     }
 
     result res;
-    if ((res = append_array(data->connection, repos, repos_count, repos_cap))
+    if ((res = append_array(data->connection, repos,
+                            current_metadata->repos_count, repos_cap))
             .failed)
         return res.status;
-    repos[repos_count++] = current_repo;
 
-    FILE *fp = fopen(REPO_FILE_NAME, "wb");
-    if (fp == NULL) {
-        nob_log(NOB_ERROR, "Failed to add repo: Could not open file (%s)",
-                strerror(errno));
-        // do not give too much information to the client,
-        // preferably don't give them the strerror
-        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
-                               "Could not save repo");
-    }
+    repos[current_metadata->repos_count++] = current_repo;
 
-    size_t items = fwrite(repos, sizeof(repo), repos_count, fp);
-    if (items != repos_count) {
-        nob_log(NOB_ERROR,
-                "Failed to add repo: Could not save all repos to disk. Repo "
-                "count: %zu, written repos: %zu",
-                repos_count, items);
-        fclose(fp);
-        return send_page_plain(data->connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
-                               "Could not save repo");
-    }
-    fclose(fp);
+    if ((res = write_data(data)).failed)
+        return res.status;
+
     nob_log(NOB_INFO, "Repo added successfully");
 
     return send_page_plain(data->connection, MHD_HTTP_OK, "success");
@@ -394,14 +390,14 @@ enum MHD_Result endpoint_repo_new_process(endpoint_data *ep_data,
     nob_log(NOB_INFO, "Processing post entry: %s, %s, %s, %s, %s", key,
             filename, content_type, transfer_encoding, data);
     if (strncmp(key, "name", MAX_POST_KEY_SIZE) == 0) {
-        if (load_repos(ep_data) == MHD_NO)
+        if (load_data(ep_data) == MHD_NO)
             return MHD_NO;
 
         nob_log(NOB_INFO, "current_user='%s'", current_user.username);
         // FIXME: This is way too slow
         size_t uid;
         bool found = false;
-        for (uid = 0; uid < users_count; uid++) {
+        for (uid = 0; uid < current_metadata->users_count; uid++) {
             // current_user should be defined by endpoint_generic_auth,
             // which is called before this function
             if (strncmp(users[uid].username, current_user.username,
@@ -418,7 +414,7 @@ enum MHD_Result endpoint_repo_new_process(endpoint_data *ep_data,
             return MHD_NO;
         }
 
-        for (size_t i = 0; i < repos_count; i++) {
+        for (size_t i = 0; i < current_metadata->repos_count; i++) {
             if (repos[i].uid == uid &&
                 strncmp(repos[i].name, data, MAX_POST_KEY_SIZE) == 0) {
                 ep_data->post_failed = true;

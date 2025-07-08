@@ -23,8 +23,7 @@
 
 // TODO: add paths to arguments
 #define WORKING_DIR "/srv/git"
-#define USER_FILE_NAME "/srv/git/justgit-users.bin"
-#define REPO_FILE_NAME "/srv/git/justgit-repos.bin"
+#define DATA_FILE_NAME "/srv/git/justgit-data.bin"
 #define GIT_USER_NAME "git"
 
 typedef struct s_arguments {
@@ -76,6 +75,11 @@ typedef struct s_result {
     bool failed;
     enum MHD_Result status;
 } result;
+
+typedef struct s_metadata {
+    size_t users_count;
+    size_t repos_count;
+} metadata;
 
 // defined in utils.c
 enum MHD_Result send_page(struct MHD_Connection *connection,
