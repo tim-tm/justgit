@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const endpoint endpoints[] = {{.url = "/",
                                       .method = "GET",
@@ -177,12 +178,20 @@ static int parse_arguments(const char *program_name, int argc, char **argv,
 }
 
 int main(int argc, char *argv[]) {
+    if (geteuid() != 0) {
+        nob_log(NOB_ERROR, "justgit needs root-permissions to manage git repositories.");
+        return 1;
+    }
+
     const char *program_name = nob_shift(argv, argc);
-    arguments args = {.port = 80};
+    arguments args = {.port = 8080};
     if (argc > 0) {
         if (parse_arguments(program_name, argc, argv, &args) != 0)
             return 1;
     }
+    nob_log(NOB_INFO, "Creating working directory '%s' if it does not exist.", WORKING_DIR);
+    nob_mkdir_if_not_exists(WORKING_DIR);
+
     nob_log(NOB_INFO, "Using port %d", args.port);
 
     struct MHD_Daemon *daemon =
@@ -196,10 +205,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     nob_log(NOB_INFO, "Server up, hit <Enter> to exit.");
+    git_libgit2_init();
 
     getchar();
 
     nob_log(NOB_INFO, "Exiting...");
+    git_libgit2_shutdown();
     MHD_stop_daemon(daemon);
     return 0;
 }

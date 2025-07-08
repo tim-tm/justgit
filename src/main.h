@@ -10,6 +10,7 @@
 // for reference
 #include <microhttpd.h>
 #include <sodium.h>
+#include <git2.h>
 
 #define USAGE_STR "Usage: %s [-p PORT]\n"
 #define MAX_ENDPOINT_INFO_LEN 16
@@ -17,8 +18,11 @@
 #define MAX_PAGE_SIZE 65536
 #define MAX_POST_KEY_SIZE 64
 #define MAX_POST_DATA_SIZE 448
-#define USER_FILE_NAME "justgit-users.bin"
-#define REPO_FILE_NAME "justgit-repos.bin"
+
+// TODO: add paths to arguments
+#define WORKING_DIR "/srv/git"
+#define USER_FILE_NAME "/srv/git/justgit-users.bin"
+#define REPO_FILE_NAME "/srv/git/justgit-repos.bin"
 
 typedef struct s_arguments {
     unsigned short port;
