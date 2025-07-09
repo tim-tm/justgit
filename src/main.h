@@ -67,7 +67,7 @@ typedef struct s_user {
 } user;
 
 typedef struct s_repo {
-    size_t uid;
+    uint64_t uid;
     char name[MAX_POST_KEY_SIZE];
 } repo;
 
@@ -77,8 +77,8 @@ typedef struct s_result {
 } result;
 
 typedef struct s_metadata {
-    size_t users_count;
-    size_t repos_count;
+    uint64_t users_count;
+    uint64_t repos_count;
 } metadata;
 
 // defined in utils.c
@@ -91,6 +91,8 @@ int chown_dir(const char *path, uid_t owner, gid_t group);
 
 // endpoint handling functions
 // defined in endpoints.c
+void endpoints_cleanup(void);
+
 enum MHD_Result endpoint_generic_auth(endpoint_data *data);
 
 enum MHD_Result endpoint_root_run(endpoint_data *data);

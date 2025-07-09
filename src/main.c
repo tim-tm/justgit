@@ -212,6 +212,7 @@ int main(int argc, char *argv[]) {
     getchar();
 
     nob_log(NOB_INFO, "Exiting...");
+    endpoints_cleanup();
     git_libgit2_shutdown();
     MHD_stop_daemon(daemon);
     return 0;
