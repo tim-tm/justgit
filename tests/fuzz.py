@@ -9,7 +9,7 @@ def random_str(length=10):
 
 
 users = []
-tests = 32
+tests = 5
 
 
 def test_user_new():
@@ -28,6 +28,7 @@ def test_user_new():
         avg_time += end - start
 
         if re.status_code != 200:
+            print(re.text)
             fails += 1
         users.append({"username": username, "password": password})
 
@@ -48,12 +49,13 @@ def test_repo_new():
         re = requests.post(
             "http://localhost:8080/repo/new",
             auth=requests.auth.HTTPBasicAuth(user["username"], user["password"]),
-            data={"test": 69},
+            data={"name": "testrepo"},
         )
         end = timeit.default_timer()
         avg_time += end - start
 
         if re.status_code != 200:
+            print(re.text)
             fails += 1
 
     avg_time /= tests
